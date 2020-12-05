@@ -10,5 +10,5 @@ Function:
 Notes:
 > This code was created to run in the Google Earth Engine (GEE) platform
 > Training data was created in ArcGIS Pro. 
-> Link to the code in Google Earth Engine: https://code.earthengine.google.com/b4c719dda2b34dab1da8386bd9f0b12c 
+> Links to view code in Google Earth Engine are included in the code text file
 > /**/ was used to block lines of code from running to save computational memory when run in GEE, please remove where neccessary.
