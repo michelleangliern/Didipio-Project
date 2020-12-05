@@ -1,0 +1,243 @@
+Project: Didipio Mining Project
+Code Title: Didipio - Landsat 8
+
+Function: 
+1) Landsat 8 imagery date filter and cloud removal
+2) Compositing imagery with indices (NDWI, NDVI and EVI) and SRTM
+3) Classification
+4) Accuracy Assessment
+
+Notes:
+> This code was created to run in the Google Earth Engine (GEE) platform
+> Training data was created in ArcGIS Pro. 
+> Link to the code in Google Earth Engine: https://code.earthengine.google.com/5541c52ed56134f0342aafe0dcac0919
+> /**/ was used to block lines of code from running to save computational memory when run in GEE, please remove where neccessary.
+___________________________________________________________________
+
+//Shapefiles
+var StudyArea = ee.FeatureCollection("users/michelleangliern/didipio-paper-resources/ddpStudyAreaBdry_Official");
+var ExportBoundary = ee.FeatureCollection("users/michelleangliern/didipio-paper-resources/didipio_GEE_dwnld_OFFICIALv2");
+var fishnet = ee.FeatureCollection("users/michelleangliern/didipio-paper-resources/ddpStudyAreaBdry_Official_fishnet");
+
+//Raster Data
+var L8_SR = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR");
+var SRTMslope = ee.Image("CSP/ERGo/1_0/Global/SRTM_landforms");  
+
+//70/30 Training Points
+var trainingpts70 = ee.FeatureCollection("users/michelleangliern/didipio-paper-resources/classification2018_v3/2018TP_v3_70");
+var trainingpts30 = ee.FeatureCollection("users/michelleangliern/didipio-paper-resources/classification2018_v3/2018TP_v3_30");
+
+var roi = StudyArea;
+Map.centerObject(roi,11.5); 
+
+//________________(1) Select images________________//
+
+//Choose Dry Dates
+var start = ee.Date('2018-01-01');
+var end = ee.Date('2019-01-01');
+var DrySeason = L8_SR.filterDate(start,end)
+                    .filterBounds(ExportBoundary)
+                    .filter(ee.Filter.lt('CLOUD_COVER', 28))
+                    .sort('CLOUD_COVER')
+                    ;
+
+//________________(2) Cloud Mask________________//
+
+  //Cloud mask function
+  var maskL8sr = function (image) {
+  
+  // Bits 3 and 5 are cloud shadow and cloud, respectively.
+  var cloudShadowBitMask = (1 << 3);
+  var cloudsBitMask = (1 << 5);
+  // Get the pixel QA band.
+  var qa = image.select('pixel_qa');
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+                .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+  return image.updateMask(mask);
+  };
+
+//_______(3) Applying the cloud removal function to Landsat collection_______//
+var DrySeason_no_cloud = DrySeason.map(maskL8sr);
+
+
+//Display surface reflectance image
+var visParams = {bands: band, min: 0, max: 5500, gamma: 1.8};
+
+// Display 3 band cloud removal surface reflectance image on the map
+// and for calculating Vege Indices
+var band = ['B1','B2','B3','B4','B5','B6','B7', 'B10', 'B11'];
+var DrySeason_CloudFree = DrySeason_no_cloud.median().select(band).clip(StudyArea);
+//print('Dry Season Cloudfree Image', DrySeason_CloudFree);
+Map.addLayer(DrySeason_CloudFree.select('B5','B6','B2'), visParams, 'Dry Season Cloudfree image', false);
+
+// Create 4 band cloud removal surface reflectance image for export
+//var band = ['B5', 'B4', 'B3','B2'];
+//var DrySeason_CloudFree_4band = DrySeason_no_cloud.median().select(band).clip(ExportBoundary);
+//print('Dry Season Cloud Free 4band',DrySeason_CloudFree_4band);
+//Map.addLayer(DrySeason_CloudFree_4band.select('B5','B4','B3'), visParams, 'Dry Season Cloud free 4band', false);
+
+
+//______________(4) Create Vegetation Indices and display surface reflectance image________________//
+
+var vegPalette = ['darkblue', 'blue', 'red', 'orange', 'yellow', 'green', 'darkgreen'];
+
+// NDWI
+var ndwi = DrySeason_CloudFree.normalizedDifference(['B3', 'B5']);
+var ndwiViz = {min: -1, max: 2, palette: ['blue', 'white', 'green']};
+//print('NDWI', ndwi);
+Map.addLayer(ndwi, ndwiViz, 'NDWI', false);
+
+// NDVI
+var ndvi = DrySeason_CloudFree.normalizedDifference(['B5', 'B4']);
+var ndviViz = {min: -0.4, max: 1, palette: vegPalette};
+//print('NDVI', ndvi);
+Map.addLayer(ndvi, ndviViz, 'NDVI', false);
+
+// Compute the EVI using an expression. https://developers.google.com/earth-engine/image_math 
+var evi = DrySeason_CloudFree.expression(
+    '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))', {
+      'NIR': DrySeason_CloudFree.select('B5'),
+      'RED': DrySeason_CloudFree.select('B4'),
+      'BLUE': DrySeason_CloudFree.select('B2')
+});
+var eviViz = {min: -1, max: 3, palette: vegPalette};
+//print('evi', evi);
+Map.addLayer(evi, eviViz, 'EVI', false);
+
+//________________SRTM SLOPE________________//
+var srtm = SRTMslope.clip(ExportBoundary);
+//print('srtm', srtm);
+Map.addLayer(srtm,{min: 0, max: 2500},'srtm', false);
+
+//________________(5) Composite Image________________//
+
+// Select which bands to mosaic together
+var composite = ee.Image.cat([DrySeason_CloudFree,ndwi,ndvi,evi,srtm]);
+//print('composite', composite);
+//Map.addLayer(composite.select('B4','B3','B2'), visParams, 'composite');
+
+// Rename bands in the composite for easier identification
+// When you combine bands from different sources, their data type (ie: integer/double/float) might be different
+// So you need to standardize the data type or else you can't export the composite
+var renamedcomposite = composite.int().select(
+    ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7','B10', 'B11', 'nd', 'nd_1', 'constant', 'constant_1'], // old names
+    ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7','B10', 'B11', 'ndwi', 'ndvi', 'evi', 'srtm']); // new names
+
+//print('renamed composite', renamedcomposite);
+Map.addLayer(renamedcomposite.select('B4','B3','B2'),
+visParams, 'renamed composite', false);
+
+
+//________________(6) SUPERVISED CLASSIFICATION________________//
+
+// Use these bands for classification.
+var SupBands = ['B2', 'B3', 'B4', 'B5', 'B6', 'B7','ndwi','ndvi','evi','srtm'];
+
+var supcomposite = renamedcomposite.select(SupBands).clip(StudyArea);
+print('sup class composite', supcomposite);
+Map.addLayer(supcomposite.select('B4','B3','B2'), visParams, 'Composite for Sup Class', false);
+
+// Next TRAINING POINTS
+var classProperty = 'Id';
+// Obtained from ArcGIS var trainingpts70 and var trainingpts30
+
+// Sample the composite to generate training data from 70% TP.
+var TrainSample = supcomposite.sampleRegions({
+  collection: trainingpts70,
+  properties: [classProperty],
+  scale: 30
+}); 
+
+// Train an XX classifier using 70% of the TP
+//.randomForest(100) .cart .gmoMaxEnt .svm
+//.decisionTree .minimumDistance .naiveBayes .spectralRegion
+
+var XClassifier_70b = ee.Classifier.randomForest(100).train({
+  features: TrainSample,
+  classProperty: classProperty,
+  inputProperties: SupBands
+});
+
+// Classify the composite.
+var supclassified2  = supcomposite.classify(XClassifier_70b);
+
+// Determine the supervised image's visuals to add to map.
+var palette = [
+  '00CED1', //water DarkTurquoise
+  '006400', //vegetation1 DarkGreen
+  '556B2F', //vegetation2 DarkOliveGreen
+  'DAA520', //bareland Goldenrod
+  'DC143C	', //builtup Crimson
+  '9400D3'  //agriculture DarkViolet
+  ];
+Map.addLayer(supclassified2, {min: 1, max: 6, palette: palette}, 'Sup Classified Image 2', false);
+
+//________________(7) Accuracy Assessment________________//
+
+var TestSample = supcomposite.select(SupBands).sampleRegions({
+  collection: trainingpts30,
+  properties: [classProperty],
+  scale: 30
+}); 
+
+// Use remaining 30% of TP to compare with the Classifier X
+var AAtest2 = TestSample.classify(XClassifier_70b);
+
+// Compute Confusion Matrix
+var ConfusionMatrix2 = AAtest2.errorMatrix(classProperty, "classification");
+print("Confusion matrix2", ConfusionMatrix2);
+print("Kappa2", ConfusionMatrix2.kappa());
+print("Producer accuracy2", ConfusionMatrix2.producersAccuracy());
+print("Consumers accuracy2", ConfusionMatrix2.consumersAccuracy());
+print("Overall accuracy2", ConfusionMatrix2.accuracy());
+
+
+//________________(8) Display boundary on the map________________//
+// Create an empty image into which to paint the features, cast to byte.
+  var Boundary1 = ee.Image(). byte();
+  var Boundary2 = ee.Image(). byte();
+  var Boundary3 = ee.Image(). byte();
+
+// Paint the polygons boundary.
+  var Outline1= Boundary1.paint({
+    featureCollection:ExportBoundary,
+    color: 1,
+    width: 2,});
+  var Outline2= Boundary2.paint({
+    featureCollection:StudyArea,
+    color: 1,
+    width: 2,});
+  var Outline3= Boundary3.paint({
+    featureCollection:fishnet,
+    color: 1,
+    width: 2,});
+Map.addLayer(Outline1, {palette: 'FF0000'}, 'ExportBoundary');
+Map.addLayer(Outline2, {palette: 'FF0000'}, 'Study Area');
+Map.addLayer(Outline3, {palette: '9400D3'}, 'Fishnet');
+
+//________________(9) Exporting________________//
+/*
+//________________Export Composite Image________________//
+
+Export.image.toDrive({
+  image: supcomposite,
+  description: 'composite_2018fullyr_VegeInd_SRTM',
+  scale: 30,
+  region: StudyArea,
+  maxPixels: 1e10,
+  folder: 'GEEexport'
+  });
+*/
+/*
+//________________Export Sup Classified Image________________//
+
+Export.image.toDrive({
+  image: supclassified2,
+  description: '1-SupFY_2015Trial1',
+  scale: 30,
+  region: StudyArea,
+  maxPixels: 1e10,
+  folder: 'GEEexport'
+  }); 
+*/
