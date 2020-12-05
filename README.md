@@ -12,3 +12,4 @@ Notes:
 > Training data was created in ArcGIS Pro. 
 > Links to view code in Google Earth Engine are included in the code text file
 > /**/ was used to block lines of code from running to save computational memory when run in GEE, please remove where neccessary.
+> For any inquiries please contact: Michelle.Ang@nottingham.edu.my or michelleangliern@gmail.com
